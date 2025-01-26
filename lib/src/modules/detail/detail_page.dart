@@ -1,17 +1,69 @@
 // src/modules/detail/detail_page.dart
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_modular/flutter_modular.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
 import '../../cubits/alert_cubit.dart';
-import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-class DetailPage extends StatelessWidget {
+class DetailPage extends StatefulWidget {
   final Map<String, dynamic> data;
 
   const DetailPage(this.data, {super.key});
 
-  Future<List<PriceData>> fetchHistoricalData(String cryptoId) async {
+  @override
+  State<DetailPage> createState() => _DetailPageState();
+}
+
+class _DetailPageState extends State<DetailPage> {
+  late final AlertCubit alertCubit;
+  late final String cryptoId;
+  late double currentPrice;
+  Timer? _timer;
+
+  final List<Duration> intervals = [
+    const Duration(minutes: 1),
+    const Duration(minutes: 2),
+    const Duration(minutes: 5),
+    const Duration(minutes: 30),
+    const Duration(hours: 1),
+  ];
+  late Duration selectedInterval;
+
+  @override
+  void initState() {
+    super.initState();
+    alertCubit = Modular.get<AlertCubit>();
+    cryptoId = widget.data['crypto'].toLowerCase();
+    currentPrice = widget.data['price'];
+    selectedInterval = intervals[0]; // Intervalo padrão: 1 minuto
+    _startAutoRefresh(selectedInterval);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel(); // Cancelar o timer ao sair da página
+    super.dispose();
+  }
+
+  Future<void> _fetchCurrentPrice() async {
+    try {
+      final response = await http.get(Uri.parse(
+          'https://api.coingecko.com/api/v3/simple/price?ids=$cryptoId&vs_currencies=usd'));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        setState(() {
+          currentPrice = data[cryptoId]['usd'];
+        });
+      }
+    } catch (e) {
+      debugPrint('Erro ao buscar preço atual: $e');
+    }
+  }
+
+  Future<List<PriceData>> fetchHistoricalData() async {
     try {
       final response = await http.get(
         Uri.parse(
@@ -29,27 +81,29 @@ class DetailPage extends StatelessWidget {
             .toList();
       }
     } catch (e) {
-      debugPrint('Error fetching historical data: $e');
+      debugPrint('Erro ao buscar dados históricos: $e');
     }
-    return []; // Retorna vazio se ocorrer algum erro
+    return [];
+  }
+
+  void _startAutoRefresh(Duration interval) {
+    _timer?.cancel();
+    _timer = Timer.periodic(interval, (_) {
+      _fetchCurrentPrice();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final String crypto = data['crypto'];
-    final double price = data['price'];
-    final String cryptoId = crypto.toLowerCase(); // Identificador para a API
-
     return Scaffold(
-      backgroundColor: const Color(0xFF121212), // Fundo escuro sofisticado
+      backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () =>
-              Navigator.of(context).pop(), // Voltar para a página anterior
+          onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(
-          crypto,
+          widget.data['crypto'],
           style: const TextStyle(
             fontWeight: FontWeight.bold,
             fontSize: 22,
@@ -59,6 +113,29 @@ class DetailPage extends StatelessWidget {
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
+        actions: [
+          PopupMenuButton<Duration>(
+            icon: const Icon(Icons.timer, color: Colors.white),
+            onSelected: (interval) {
+              setState(() {
+                selectedInterval = interval;
+              });
+              _startAutoRefresh(selectedInterval);
+            },
+            itemBuilder: (context) {
+              return intervals
+                  .map((interval) => PopupMenuItem(
+                        value: interval,
+                        child: Text(
+                          interval.inMinutes < 60
+                              ? '${interval.inMinutes} min'
+                              : '${interval.inHours} hr',
+                        ),
+                      ))
+                  .toList();
+            },
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -86,7 +163,7 @@ class DetailPage extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      '\$${price.toStringAsFixed(2)}',
+                      '\$${currentPrice.toStringAsFixed(2)}',
                       style: const TextStyle(
                         color: Colors.greenAccent,
                         fontWeight: FontWeight.bold,
@@ -109,7 +186,7 @@ class DetailPage extends StatelessWidget {
                 padding: const EdgeInsets.all(16.0),
                 child: BlocBuilder<AlertCubit, AlertState>(
                   builder: (context, state) {
-                    final alertPrice = state.alerts[crypto];
+                    final alertPrice = state.alerts[widget.data['crypto']];
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -123,7 +200,7 @@ class DetailPage extends StatelessWidget {
                         const SizedBox(height: 12),
                         if (alertPrice != null)
                           Text(
-                            'Valor cofigurado: \$${alertPrice.toStringAsFixed(2)}',
+                            'Valor configurado: \$${alertPrice.toStringAsFixed(2)}',
                             style: const TextStyle(
                               color: Colors.amber,
                               fontWeight: FontWeight.bold,
@@ -143,10 +220,10 @@ class DetailPage extends StatelessWidget {
                           onSubmitted: (value) {
                             final targetPrice = double.tryParse(value);
                             if (targetPrice != null) {
-                              context.read<AlertCubit>().addAlert(
-                                    crypto,
-                                    targetPrice,
-                                  );
+                              alertCubit.addAlert(
+                                widget.data['crypto'],
+                                targetPrice,
+                              );
                             }
                           },
                         ),
@@ -160,7 +237,7 @@ class DetailPage extends StatelessWidget {
             // Gráfico de Histórico de Preços
             Expanded(
               child: FutureBuilder<List<PriceData>>(
-                future: fetchHistoricalData(cryptoId),
+                future: fetchHistoricalData(),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(
@@ -169,7 +246,7 @@ class DetailPage extends StatelessWidget {
                   } else if (snapshot.hasError || snapshot.data!.isEmpty) {
                     return const Center(
                       child: Text(
-                        'Error loading data',
+                        'Erro ao carregar dados',
                         style: TextStyle(color: Colors.redAccent),
                       ),
                     );

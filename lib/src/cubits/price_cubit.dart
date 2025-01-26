@@ -1,4 +1,4 @@
-// src/cubits/price_cubit.dart
+import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -20,13 +20,16 @@ class PriceState {
 }
 
 class PriceCubit extends Cubit<PriceState> {
+  Timer? _timer;
+
   PriceCubit() : super(PriceState.initial());
 
   Future<void> fetchPrices() async {
     emit(PriceState(prices: {}, isLoading: true, error: ''));
 
     try {
-      final response = await http.get(Uri.parse('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd'));
+      final response = await http.get(Uri.parse(
+          'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd'));
       if (response.statusCode == 200) {
         final data = json.decode(response.body) as Map<String, dynamic>;
         final prices = {
@@ -35,10 +38,26 @@ class PriceCubit extends Cubit<PriceState> {
         };
         emit(PriceState(prices: prices, isLoading: false, error: ''));
       } else {
-        emit(PriceState(prices: {}, isLoading: false, error: 'Erro ao buscar preços.'));
+        emit(PriceState(
+            prices: {}, isLoading: false, error: 'Erro ao buscar preços.'));
       }
     } catch (e) {
       emit(PriceState(prices: {}, isLoading: false, error: e.toString()));
     }
+  }
+
+  void startAutoRefresh(Duration interval) {
+    stopAutoRefresh(); // Para qualquer timer em execução antes de iniciar um novo
+    _timer = Timer.periodic(interval, (_) => fetchPrices());
+  }
+
+  void stopAutoRefresh() {
+    _timer?.cancel();
+  }
+
+  @override
+  Future<void> close() {
+    stopAutoRefresh();
+    return super.close();
   }
 }
